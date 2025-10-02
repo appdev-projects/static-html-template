@@ -38,7 +38,8 @@
     "bin/": true,
     "spec/": true,
     "examples.txt": true,
-    "config/": true
+    "config/": true,
+    "LICENSE.txt": true
   },
   "files.insertFinalNewline": true,
   "files.trimFinalNewlines": true,
