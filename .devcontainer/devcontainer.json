@@ -26,7 +26,7 @@
   "otherPortsAttributes": {"onAutoForward": "ignore"},
 
   // Use 'postCreateCommand' to run commands after the container is created.
-  "postCreateCommand": "sudo wget -qO ./prompt 'https://gist.githubusercontent.com/jelaniwoods/7e5db8d72b3dfac257b7eb562cfebf11/raw/af43083d91c0eb1489059a2ad9c39474a34ddbda/thoughtbot-style-prompt' && /bin/bash -l -c 'cat ./prompt >> ~/.bashrc' && rm ./prompt && source ~/.bashrc",
+  "postCreateCommand": "sudo wget -qO ./prompt 'https://gist.githubusercontent.com/jelaniwoods/7e5db8d72b3dfac257b7eb562cfebf11/raw/af43083d91c0eb1489059a2ad9c39474a34ddbda/thoughtbot-style-prompt' && /bin/bash -l -c 'cat ./prompt >> ~/.bashrc' && rm ./prompt && . ~/.bashrc",
 
   "customizations": {
     "vscode": {
