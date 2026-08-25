@@ -33,7 +33,6 @@
       "extensions": ["vortizhe.simple-ruby-erb",
                      "mbessey.vscode-rufo",
                      "aliariff.vscode-erb-beautify",
-                     "eamodio.gitlens",
                      "setobiralo.erb-commenter",
                      "firstdraft.terminal-clear",
                      "-github.copilot-chat"]
