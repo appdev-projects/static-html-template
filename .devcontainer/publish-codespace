@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# Publishes a codespace created with "Use this template → Open in a codespace"
+# to a new private repository in the codespace owner's personal account, so
+# the work in it is saved to their own GitHub repository from the start.
+#
+# Runs as the postCreateCommand (the editor waits for it), again on every
+# attach, and from the pre-commit hook, so an interrupted attempt is retried.
+# It exits immediately outside Codespaces and in any workspace that already
+# has an origin remote: ordinary repository codespaces, or already published.
+#
+# Uses GitHub's "Create a repository from an unpublished codespace" endpoint:
+# https://docs.github.com/en/rest/codespaces/codespaces#create-a-repository-from-an-unpublished-codespace
+# The codespace's built-in GITHUB_TOKEN is enough for it; `gh repo create` and
+# POST /user/repos reject that token.
+set -Eeuo pipefail
+
+max_name_attempts=20
+codespaces_env_file="${CODESPACES_ENV_FILE:-/workspaces/.codespaces/shared/.env}"
+
+if [[ "${CODESPACES:-}" != "true" ]]; then
+  exit 0
+fi
+
+# Git exports these while running hooks; this script manages its own repository.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! workspace="$(git -C "${script_dir}" rev-parse --show-toplevel 2>/dev/null)"; then
+  exit 0
+fi
+cd "${workspace}"
+
+has_origin() {
+  git remote get-url origin >/dev/null 2>&1
+}
+
+if has_origin; then
+  exit 0
+fi
+
+fail() {
+  printf '\n' >&2
+  printf '%s\n' "$@" >&2
+  printf '\n' >&2
+  exit 1
+}
+
+# Guard commits before anything that can fail. The hook re-runs this script.
+current_hooks_path="$(git config --local --get core.hooksPath || true)"
+if [[ -z "${current_hooks_path}" ]]; then
+  git config --local core.hooksPath .devcontainer/git-hooks
+fi
+
+# The postCreateCommand, attach, and a commit can all start this script at once.
+exec 9>"$(git rev-parse --git-path publish-codespace.lock)"
+if ! flock --wait 300 9; then
+  fail "Another publish of this codespace is still running; try again in a minute."
+fi
+if has_origin; then
+  exit 0
+fi
+
+# Lifecycle commands don't always have the Codespaces variables exported;
+# Codespaces also writes them to a shared env file.
+read_shared_env() {
+  local key="$1" line value="" count=0
+  if [[ ! -r "${codespaces_env_file}" ]]; then
+    return 1
+  fi
+  while IFS= read -r line; do
+    if [[ "${line}" == "${key}="* ]]; then
+      value="${line#"${key}="}"
+      count="$((count + 1))"
+    fi
+  done <"${codespaces_env_file}"
+  if [[ "${count}" != "1" || -z "${value}" ]]; then
+    return 1
+  fi
+  printf '%s' "${value}"
+}
+
+codespace_name="${CODESPACE_NAME:-$(read_shared_env CODESPACE_NAME || true)}"
+token="${GITHUB_TOKEN:-$(read_shared_env GITHUB_TOKEN || true)}"
+if [[ -z "${codespace_name}" || -z "${token}" ]]; then
+  fail "Codespaces did not provide CODESPACE_NAME and GITHUB_TOKEN, so this codespace can't be saved to GitHub yet." \
+    "Open a new terminal and run: .devcontainer/publish-codespace"
+fi
+
+github_api() {
+  GH_TOKEN="${token}" timeout 60 gh api "$@"
+}
+
+if ! codespace_json="$(github_api "/user/codespaces/${codespace_name}")"; then
+  fail "Could not look up codespace ${codespace_name} on GitHub." \
+    "Check your connection, then run: .devcontainer/publish-codespace"
+fi
+
+publish_url="$(jq -r '.publish_url // empty' <<<"${codespace_json}")"
+full_name=""
+
+if [[ -n "${publish_url}" ]]; then
+  base_name="$(basename "${workspace}" | tr -c 'A-Za-z0-9._\n-' '-')"
+  echo "Saving this codespace to a new private repository in your GitHub account..."
+
+  for ((attempt = 1; attempt <= max_name_attempts; attempt++)); do
+    name="${base_name}"
+    if ((attempt > 1)); then
+      name="${base_name}-${attempt}"
+    fi
+
+    if response="$(github_api --method POST "/user/codespaces/${codespace_name}/publish" \
+      -f name="${name}" -F private=true 2>&1)"; then
+      full_name="$(jq -r '.repository.full_name' <<<"${response}")"
+      break
+    fi
+
+    if [[ "${response}" == *"already exists"* ]]; then
+      echo "You already have a repository named ${name}; trying another name."
+      continue
+    fi
+
+    fail "GitHub refused to publish this codespace:" "${response}" \
+      "Run .devcontainer/publish-codespace to try again."
+  done
+
+  if [[ -z "${full_name}" ]]; then
+    fail "Every name from ${base_name} to ${base_name}-${max_name_attempts} is taken in your account." \
+      "Rename or delete one, then run: .devcontainer/publish-codespace"
+  fi
+else
+  # Already published, e.g. an earlier run stopped before adding the remote.
+  full_name="$(jq -r '.repository.full_name // empty' <<<"${codespace_json}")"
+  repository_owner="$(jq -r '.repository.owner.login // empty' <<<"${codespace_json}")"
+  codespace_owner="$(jq -r '.owner.login // empty' <<<"${codespace_json}")"
+  if [[ -z "${full_name}" || "${repository_owner}" != "${codespace_owner}" ]]; then
+    fail "This codespace can't be published and isn't linked to a repository you own (${full_name:-none})." \
+      "Commit blocking stays on; ask your instructor for help."
+  fi
+fi
+
+git remote add origin "https://github.com/${full_name}.git"
+
+if ! git rev-parse --verify --quiet HEAD >/dev/null; then
+  echo "Saved to https://github.com/${full_name} (private). Commit and push your work as usual."
+  exit 0
+fi
+
+# The token's write access to the new repository can take a moment to apply.
+for attempt in 1 2 3 4 5; do
+  if GH_TOKEN="${token}" GIT_TERMINAL_PROMPT=0 timeout 120 \
+    git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+    push --quiet --set-upstream origin HEAD; then
+    echo "Saved to https://github.com/${full_name} (private). Commit and push your work as usual."
+    exit 0
+  fi
+  sleep "$((attempt * 3))"
+done
+
+fail "Created https://github.com/${full_name}, but the first push failed." \
+  "Your files are safe here; run 'git push --set-upstream origin HEAD' to try again."

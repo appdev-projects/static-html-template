@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Enabled by .devcontainer/publish-codespace in codespaces opened from the
+# template: no commits until the codespace is saved to the user's own
+# repository. Publishing is retried here before giving up.
+if [[ "${CODESPACES:-}" != "true" ]] || git remote get-url origin >/dev/null 2>&1; then
+  exit 0
+fi
+
+"$(git rev-parse --show-toplevel)/.devcontainer/publish-codespace"
+
+if git remote get-url origin >/dev/null 2>&1; then
+  exit 0
+fi
+
+cat >&2 <<'MESSAGE'
+Commit blocked: this codespace isn't saved to your GitHub account yet.
+Fix the problem shown above, then commit again.
+MESSAGE
+exit 1

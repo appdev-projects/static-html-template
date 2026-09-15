@@ -25,8 +25,17 @@
 
   "otherPortsAttributes": {"onAutoForward": "ignore"},
 
+  // A codespace opened from the template ("Use this template → Open in a codespace")
+  // has no repository. Save it to a private repository in the user's own account
+  // before the editor opens, and retry on every attach if that failed. Does
+  // nothing in codespaces that already have an origin remote.
+  "waitFor": "postCreateCommand",
+
   // Use 'postCreateCommand' to run commands after the container is created.
-  "postCreateCommand": "gem install rufo && gem install htmlbeautifier",
+  "postCreateCommand": ".devcontainer/publish-codespace; gem install rufo && gem install htmlbeautifier",
+
+  // Use 'postAttachCommand' to run commands each time you attach to the container.
+  "postAttachCommand": ".devcontainer/publish-codespace",
 
   "customizations": {
     "vscode": {
